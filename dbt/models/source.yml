@@ -1,7 +1,0 @@
-version: 2
-sources:
-    - name : snowflake
-      database: insurance
-      schema: raw_date
-      tables:
-        - name: CLAIMS
