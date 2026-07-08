@@ -3,7 +3,7 @@
 Faker → MongoDB → Snowflake (Airbyte ELT) → Snowpark ML: </br>
 <p>A practical end-to-end pipeline that creates synthetic data with Python + Faker, stores it in MongoDB, uses Airbyte to move it to Snowflake, and trains a Logistic Regression model inside Snowflake using Snowpark.</p>
 
-What’s in this repo:
+<p>What’s in this repo:</br>
 
 Generate realistic fake data (customizable size and fields).
 
