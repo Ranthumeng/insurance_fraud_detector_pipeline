@@ -18,63 +18,47 @@ query = f"SELECT * FROM {target_table}"
 df = pd.read_sql(query, con=conn) 
 print(f"Initial load of {len(df)} rows completed.")
 
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder
+from snowflake.snowpark.functions import col, iff
+from snowflake.ml.modeling.preprocessing import StandardScaler, OneHotEncoder
+from snowflake.ml.modeling.linear_model import LogisticRegression
+from snowflake.ml.modeling.pipeline import Pipeline
+from snowflake.ml.modeling.metrics import accuracy_score, precision_score, recall_score, confusion_matrix
 
-print(df.head())
-print(df.columns)
 
-#renaming column
-df = df.rename({'_ID': 'ID'})
+df = df.rename(col("_ID"), "ID")
 
-# 2. Replace values and overwrite the column using with_column
 df = df.with_column(
-    "IS_FRAUD", 
-    df["IS_FRAUD"].replace({'true': 1, 'false': 0, 'True': 1, 'False': 0, True: 1, False: 0})
+    "IS_FRAUD",
+    iff(col("IS_FRAUD").in_(["true", "True", True]), 1, 0)
 )
 
-# 3. Drop Airbyte metadata columns (Pass names directly as arguments)
 airbyte_cols = [
     '_AIRBYTE_RAW_ID', '_AIRBYTE_META', '_AIRBYTE_GENERATION_ID',
     '_AB_CDC_CURSOR', '_AB_CDC_DELETED_AT', '_AB_CDC_UPDATED_AT', '_AIRBYTE_EXTRACTED_AT'
 ]
-df = df.drop(airbyte_cols)
-df.show()
-
-
 categorical = ["IS_TYPE"]
+categorical_ohe = ["IS_TYPE_OHE"]
 numeric = ["AMOUNT"]
+label_col = ["IS_FRAUD"]
 
+# Snowpark DataFrame has a native random_split — no need to leave the warehouse
+train_df, test_df = df.random_split(weights=[0.7, 0.3], seed=42)
 
-#train/test sets
-X_train, X_test, y_train, y_test = train_test_split(X,y, test_size = 0.3, stratify=y)
+pipe = Pipeline(steps=[
+    ("scaler", StandardScaler(input_cols=numeric, output_cols=numeric)),
+    ("ohe", OneHotEncoder(input_cols=categorical, output_cols=categorical_ohe, drop_input_cols=True)),
+    ("classifier", LogisticRegression(
+        input_cols=numeric + categorical_ohe,
+        label_cols=label_col,
+        output_cols=["PREDICTION"],
+        max_iter=1000,
+    )),
+])
 
-preprocessor = ColumnTransformer(
-    transformers = [
-        ("num",StandardScaler(),numeric),
-        ("cat",OneHotEncoder(drop="first"),categorical)
-    ],
-    remainder = "drop"
-)
+pipe.fit(train_df)
+result_df = pipe.predict(test_df)
 
-preprocessor = ColumnTransformer(
-    transformers = [
-        ("num",StandardScaler(),numeric),
-        ("cat",OneHotEncoder(drop="first"),categorical)
-    ],
-    remainder = "drop"
-)
-
-pipeline.fit(X_train, y_train)
-
-y_pred = pipeline.predict(X_test)
-
-print(classification_report(y_test,y_pred))
-
-confusion_matrix(y_test,y_pred)
-
+print("Accuracy:", accuracy_score(df=result_df, y_true_col_names=label_col, y_pred_col_names=["PREDICTION"]))
+print("Precision:", precision_score(df=result_df, y_true_col_names=label_col, y_pred_col_names=["PREDICTION"]))
+print("Recall:", recall_score(df=result_df, y_true_col_names=label_col, y_pred_col_names=["PREDICTION"]))
+print(confusion_matrix(df=result_df, y_true_col_names=label_col, y_pred_col_names=["PREDICTION"]))
