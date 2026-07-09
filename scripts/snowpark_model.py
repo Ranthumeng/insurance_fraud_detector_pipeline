@@ -1,47 +1,49 @@
-import snowflake.connector
-
-# Connecting to data source
-conn = snowflake.connector.connect(
-    user='<USERNAME>',
-    password='<PASSWORD>',
-    account='<ACCOUNT_ID>', 
-    warehouse='<WAREHOUSE>',
-    database='<DATABASE_NAME',
-    schema='<SCHEMA_NAME>'
-)
-
-# Define the specific table you want to stream
-target_table = "<TARGET_TABLE>"
-
-# Fetch data into a Pandas DataFrame
-query = f"SELECT * FROM {target_table}"
-df = pd.read_sql(query, con=conn) 
-print(f"Initial load of {len(df)} rows completed.")
-
+from snowflake.snowpark import Session
 from snowflake.snowpark.functions import col, iff
 from snowflake.ml.modeling.preprocessing import StandardScaler, OneHotEncoder
 from snowflake.ml.modeling.linear_model import LogisticRegression
 from snowflake.ml.modeling.pipeline import Pipeline
 from snowflake.ml.modeling.metrics import accuracy_score, precision_score, recall_score, confusion_matrix
 
+# Build a Snowpark session (NOT snowflake.connector + pd.read_sql)
+connection_params = {
+    "user": "<USERNAME>",
+    "password": "<PASSWORD>",
+    "account": "<ACCOUNT_ID>",
+    "warehouse": "<WAREHOUSE>",
+    "database": "<DATABASE_NAME>",
+    "schema": "<SCHEMA_NAME>",
+}
+session = Session.builder.configs(connection_params).create()
 
+target_table = "<TARGET_TABLE>"
+
+# This returns a Snowpark DataFrame, lazily evaluated — nothing pulled locally yet
+df = session.table(target_table)
+print(f"Initial row count: {df.count()}")
+
+# 1. Rename — now this is genuinely a Snowpark DataFrame, so this method exists
 df = df.rename(col("_ID"), "ID")
 
+# 2. Normalize IS_FRAUD to 0/1
 df = df.with_column(
     "IS_FRAUD",
     iff(col("IS_FRAUD").in_(["true", "True", True]), 1, 0)
 )
 
+# 3. Drop Airbyte metadata columns — the line that went missing
 airbyte_cols = [
     '_AIRBYTE_RAW_ID', '_AIRBYTE_META', '_AIRBYTE_GENERATION_ID',
     '_AB_CDC_CURSOR', '_AB_CDC_DELETED_AT', '_AB_CDC_UPDATED_AT', '_AIRBYTE_EXTRACTED_AT'
 ]
+df = df.drop(*airbyte_cols)
+
 categorical = ["IS_TYPE"]
 categorical_ohe = ["IS_TYPE_OHE"]
 numeric = ["AMOUNT"]
 label_col = ["IS_FRAUD"]
 
-# Snowpark DataFrame has a native random_split — no need to leave the warehouse
+# Now random_split works, because df is a Snowpark DataFrame
 train_df, test_df = df.random_split(weights=[0.7, 0.3], seed=42)
 
 pipe = Pipeline(steps=[
